@@ -14,6 +14,7 @@
   let latestTabContent = null;
   let floatingStatsVisible = true;
   let dashboardOpen = false;
+  let nativeTabBeforeStats = null;
   const hiddenPageChildren = new Map();
 
   function escapeHtml(value) {
@@ -259,10 +260,10 @@
   }
 
   function showDashboard() {
-    if (!floatingStatsVisible) return;
+    if (!floatingStatsVisible) return false;
     const pageContent = findPrPageContent();
     const host = document.getElementById(HOST_ID);
-    if (!pageContent || !host) return;
+    if (!pageContent || !host) return false;
 
     for (const child of [...pageContent.children]) {
       if (child !== host && !hiddenPageChildren.has(child)) {
@@ -274,15 +275,44 @@
     dashboardOpen = true;
     host.style.display = "block";
     host.shadowRoot.querySelector(".panel").classList.add("open");
+    return true;
   }
 
-  function hideDashboard() {
+  function hideDashboard(restoreNativeTab = true) {
     dashboardOpen = false;
     const host = document.getElementById(HOST_ID);
     host?.shadowRoot?.querySelector(".panel")?.classList.remove("open");
     if (host) host.style.display = "none";
     for (const [child, display] of hiddenPageChildren) child.style.display = display;
     hiddenPageChildren.clear();
+
+    if (restoreNativeTab && nativeTabBeforeStats?.isConnected) {
+      nativeTabBeforeStats.classList.add("selected");
+      nativeTabBeforeStats.setAttribute("aria-selected", "true");
+      nativeTabBeforeStats.setAttribute("tabindex", "0");
+    }
+    nativeTabBeforeStats = null;
+
+    const statsTab = document.getElementById(TAB_HOST_ID);
+    if (statsTab) {
+      statsTab.classList.remove("selected");
+      statsTab.setAttribute("aria-selected", "false");
+      statsTab.setAttribute("tabindex", "-1");
+    }
+  }
+
+  function selectStatsTab(tabList, statsTab) {
+    nativeTabBeforeStats = [...tabList.querySelectorAll('[role="tab"]')]
+      .find((tab) => tab !== statsTab && tab.getAttribute("aria-selected") === "true") || null;
+    if (nativeTabBeforeStats) {
+      nativeTabBeforeStats.classList.remove("selected");
+      nativeTabBeforeStats.setAttribute("aria-selected", "false");
+      nativeTabBeforeStats.setAttribute("tabindex", "-1");
+    }
+    const opened = showDashboard();
+    statsTab.setAttribute("aria-selected", String(opened));
+    statsTab.setAttribute("tabindex", opened ? "0" : "-1");
+    statsTab.classList.toggle("selected", opened);
   }
 
   function ensureStatsTab() {
@@ -313,12 +343,21 @@
       host.addEventListener("click", (event) => {
         event.preventDefault();
         if (!floatingStatsVisible) return;
-        const isOpen = !dashboardOpen;
-        if (isOpen) showDashboard();
+        if (!dashboardOpen) selectStatsTab(tabList, host);
         else hideDashboard();
-        host.setAttribute("aria-selected", String(isOpen));
-        host.classList.toggle("selected", isOpen);
       });
+
+      tabList.addEventListener("click", (event) => {
+        const clickedTab = event.target.closest?.('[role="tab"]');
+        if (clickedTab && clickedTab !== host) hideDashboard(false);
+      });
+
+      const tabObserver = new MutationObserver(() => {
+        const nativeTabSelected = [...tabList.querySelectorAll('[role="tab"]')]
+          .some((tab) => tab !== host && tab.getAttribute("aria-selected") === "true");
+        if (dashboardOpen && nativeTabSelected) hideDashboard(false);
+      });
+      tabObserver.observe(tabList, { attributes: true, subtree: true, attributeFilter: ["aria-selected", "class"] });
     }
 
     if (host.parentElement !== tabList) {
