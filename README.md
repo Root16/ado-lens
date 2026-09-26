@@ -1,6 +1,6 @@
 # ADO Lens
 
-A tiny Chrome and Firefox extension that adds compact stats chips to the Azure DevOps PR tab row and a detailed bottom-right stats floater.
+A tiny Chrome and Firefox extension that adds a Stats tab to Azure DevOps pull requests and opens a detailed dashboard with PR metrics.
 
 It shows:
 
@@ -47,7 +47,7 @@ The uploadable ZIP files are created in `chrome/dist/` and `firefox/dist/`. Each
 
 Then open or reload an Azure DevOps pull request.
 
-The key stats appear beside the PR navigation tabs and in the lower-right floater. Select either location for the full summary. Open **ADO Lens settings** from the browser toolbar icon to show or hide the floater; the setting syncs through the browser and does not hide the tab-row stats.
+The Stats tab appears beside the PR navigation tabs. Select it to open the dashboard. Open **ADO Lens settings** from the browser toolbar icon to show or hide the Stats tab; the setting syncs through the browser.
 
 ## Tests
 

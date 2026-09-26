@@ -13,6 +13,8 @@
   let view = null;
   let latestTabContent = null;
   let floatingStatsVisible = true;
+  let dashboardOpen = false;
+  const hiddenPageChildren = new Map();
 
   function escapeHtml(value) {
     return String(value ?? "")
@@ -189,58 +191,51 @@
   function ensureView() {
     let host = document.getElementById(HOST_ID);
     if (host) {
-      host.style.display = floatingStatsVisible ? "block" : "none";
+      host.style.display = dashboardOpen && floatingStatsVisible ? "block" : "none";
       return host.shadowRoot;
     }
     host = document.createElement("div");
     host.id = HOST_ID;
-    host.style.cssText = "all:initial;position:fixed;right:18px;bottom:18px;z-index:2147483647";
-    host.style.display = floatingStatsVisible ? "block" : "none";
+    host.style.cssText = "all:initial;display:none;width:100%;box-sizing:border-box";
     const shadow = host.attachShadow({ mode: "open" });
     shadow.innerHTML = `
       <style>
         :host { color-scheme: light dark; }
         * { box-sizing: border-box; }
-        .wrap { font: 12px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:#202124; }
-        .chip { display:flex; align-items:center; gap:8px; min-height:34px; border:1px solid #d0d7de; border-radius:18px; padding:7px 11px; background:#fff; color:#24292f; box-shadow:0 3px 14px #0002; cursor:pointer; font-weight:600; }
-        .chip:hover { background:#f6f8fa; }
+        .wrap { font: 12px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:#242424; }
+        .chip { display:none; }
         .mark { display:grid; place-items:center; width:20px; height:20px; border-radius:6px; background:#0078d4; color:#fff; font-size:10px; font-weight:800; }
         .plus { color:#1a7f37; } .minus { color:#cf222e; }
-        .panel { display:none; position:absolute; right:0; bottom:43px; width:330px; border:1px solid #d0d7de; border-radius:10px; background:#fff; box-shadow:0 8px 28px #0003; overflow:hidden; }
+        .panel { display:none; width:100%; border:1px solid #d6d6d6; border-radius:4px; background:#fff; box-shadow:0 2px 8px #0002; overflow:hidden; }
         .panel.open { display:block; }
-        .head { padding:13px 14px 11px; border-bottom:1px solid #d8dee4; background:#f6f8fa; }
-        .eyebrow { display:flex; justify-content:space-between; color:#57606a; font-size:11px; }
-        .title { margin-top:4px; font-size:14px; font-weight:650; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-        .branch { margin-top:4px; color:#57606a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-        .grid { display:grid; grid-template-columns:repeat(3,1fr); padding:8px; }
-        .stat { min-height:58px; margin:2px; padding:8px; border-radius:7px; background:#f6f8fa; }
+        .toolbar { display:flex; justify-content:flex-end; padding:8px 10px 0; }
+        .message { padding:16px; }
+        .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:7px; padding:10px; }
+        .stat { min-height:68px; padding:11px; border:1px solid #e1e1e1; border-radius:7px; background:#f5f5f5; }
         .value { font-size:17px; font-weight:700; font-variant-numeric:tabular-nums; }
         .label { margin-top:2px; color:#57606a; font-size:10px; text-transform:uppercase; letter-spacing:.04em; }
-        .foot { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:9px 12px; border-top:1px solid #d8dee4; color:#57606a; font-size:10px; }
-        .refresh { border:0; border-radius:5px; padding:4px 7px; background:transparent; color:#0969da; cursor:pointer; font:inherit; }
+        .refresh { border:0; border-radius:4px; padding:4px 7px; background:transparent; color:#0969da; cursor:pointer; font:inherit; }
         .refresh:hover { background:#ddf4ff; }
         .error { max-width:280px; white-space:normal; }
         @media (prefers-color-scheme: dark) {
-          .wrap { color:#e6edf3; } .chip,.panel { background:#161b22; color:#e6edf3; border-color:#30363d; }
-          .chip:hover,.head,.stat { background:#21262d; } .head,.foot { border-color:#30363d; }
-          .eyebrow,.branch,.label,.foot { color:#8b949e; }
+          .wrap { color:#f1f1f1; }
+          .panel { background:#2d2d2d; color:#f1f1f1; border-color:#454545; box-shadow:0 2px 8px #0008; }
+          .stat { background:#252525; border-color:#414141; }
+          .label { color:#b8b8b8; }
         }
       </style>
       <div class="wrap">
         <section class="panel" aria-label="Azure DevOps pull request stats"></section>
         <button class="chip" type="button" aria-expanded="false"><span class="mark">PR</span><span class="chip-text">Loading PR stats…</span></button>
       </div>`;
-    document.documentElement.appendChild(host);
-    shadow.querySelector(".chip").addEventListener("click", () => {
-      const panel = shadow.querySelector(".panel");
-      panel.classList.toggle("open");
-      shadow.querySelector(".chip").setAttribute("aria-expanded", String(panel.classList.contains("open")));
-    });
+    const pageContent = findPrPageContent();
+    if (pageContent) pageContent.prepend(host);
+    else document.documentElement.appendChild(host);
     view = shadow;
     return shadow;
   }
 
-  function findPrTabBar() {
+  function findPrTabList() {
     const candidates = [...document.querySelectorAll('[role="tablist"], .bolt-tabbar-tabs')];
     let best = null;
     let bestScore = 0;
@@ -253,71 +248,114 @@
       }
     }
     if (!best || bestScore < 2) return null;
-    return best.closest(".bolt-tabbar") || best.parentElement;
+    return best.matches('[role="tablist"]') ? best : best.closest('[role="tablist"]') || best;
   }
 
-  function ensureTabChips() {
-    const tabBar = findPrTabBar();
-    if (!tabBar) return null;
+  function findPrPageContent() {
+    const tabList = findPrTabList();
+    const tabBar = tabList?.closest(".repos-pr-details-page-tabbar") || tabList?.parentElement;
+    const pageContent = tabBar?.nextElementSibling;
+    return pageContent?.classList.contains("page-content") ? pageContent : null;
+  }
+
+  function showDashboard() {
+    if (!floatingStatsVisible) return;
+    const pageContent = findPrPageContent();
+    const host = document.getElementById(HOST_ID);
+    if (!pageContent || !host) return;
+
+    for (const child of [...pageContent.children]) {
+      if (child !== host && !hiddenPageChildren.has(child)) {
+        hiddenPageChildren.set(child, child.style.display);
+        child.style.display = "none";
+      }
+    }
+    if (host.parentElement !== pageContent) pageContent.prepend(host);
+    dashboardOpen = true;
+    host.style.display = "block";
+    host.shadowRoot.querySelector(".panel").classList.add("open");
+  }
+
+  function hideDashboard() {
+    dashboardOpen = false;
+    const host = document.getElementById(HOST_ID);
+    host?.shadowRoot?.querySelector(".panel")?.classList.remove("open");
+    if (host) host.style.display = "none";
+    for (const [child, display] of hiddenPageChildren) child.style.display = display;
+    hiddenPageChildren.clear();
+  }
+
+  function ensureStatsTab() {
+    const tabList = findPrTabList();
+    if (!tabList) return null;
 
     let host = document.getElementById(TAB_HOST_ID);
     if (!host) {
-      host = document.createElement("span");
+      const nativeTab = tabList.querySelector('[role="tab"]');
+      host = nativeTab ? nativeTab.cloneNode(true) : document.createElement("div");
       host.id = TAB_HOST_ID;
-      host.style.cssText = "display:inline-flex;align-items:center;margin-left:auto;padding:0 12px;white-space:nowrap;align-self:stretch";
-      const shadow = host.attachShadow({ mode: "open" });
-      shadow.innerHTML = `
-        <style>
-          * { box-sizing:border-box; }
-          .row { display:inline-flex; align-items:center; gap:6px; margin:auto 0; color:inherit; font:11px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
-          button { display:inline-flex; align-items:center; gap:5px; padding:0; border:0; background:transparent; color:inherit; cursor:pointer; font:inherit; }
-          .chip { display:inline-flex; align-items:center; min-height:22px; padding:2px 7px; border:1px solid rgba(128,128,128,.28); border-radius:11px; background:rgba(128,128,128,.10); font-weight:600; font-variant-numeric:tabular-nums; }
-          .plus { color:#1a7f37; background:rgba(46,160,67,.10); border-color:rgba(46,160,67,.25); }
-          .minus { color:#cf222e; background:rgba(248,81,73,.10); border-color:rgba(248,81,73,.25); }
-          button:hover .chip { border-color:rgba(9,105,218,.55); }
-          @media (prefers-color-scheme: dark) { .plus { color:#3fb950; } .minus { color:#f85149; } }
-        </style>
-        <span class="row"><button class="stats" type="button" title="Open floating PR stats"></button></span>`;
-      shadow.querySelector(".stats").addEventListener("click", () => {
+      host.classList.remove("selected");
+      const tabText = host.querySelector(".bolt-tab-text");
+      if (tabText) {
+        tabText.textContent = "Stats";
+        tabText.setAttribute("data-content", "Stats");
+      } else {
+        host.textContent = "Stats";
+      }
+      host.setAttribute("role", "tab");
+      host.setAttribute("aria-selected", "false");
+      host.setAttribute("aria-posinset", String(tabList.querySelectorAll('[role="tab"]').length + 1));
+      host.setAttribute("aria-setsize", String(tabList.querySelectorAll('[role="tab"]').length + 1));
+      host.setAttribute("tabindex", "-1");
+      host.removeAttribute("href");
+      host.removeAttribute("aria-controls");
+      host.title = "Open pull-request stats";
+      host.addEventListener("click", (event) => {
+        event.preventDefault();
         if (!floatingStatsVisible) return;
-        const floater = ensureView();
-        const panel = floater.querySelector(".panel");
-        panel.classList.add("open");
-        floater.querySelector(".chip").setAttribute("aria-expanded", "true");
+        const isOpen = !dashboardOpen;
+        if (isOpen) showDashboard();
+        else hideDashboard();
+        host.setAttribute("aria-selected", String(isOpen));
+        host.classList.toggle("selected", isOpen);
       });
     }
 
-    if (host.parentElement !== tabBar) tabBar.appendChild(host);
-    if (latestTabContent !== null) host.shadowRoot.querySelector(".stats").innerHTML = latestTabContent;
-    host.shadowRoot.querySelector(".stats").title = floatingStatsVisible
-      ? "Open floating PR stats"
-      : "Floating PR stats are disabled in extension settings";
+    if (host.parentElement !== tabList) {
+      const nativeTabs = [...tabList.querySelectorAll('[role="tab"]')].filter((tab) => tab !== host);
+      const lastNativeTab = nativeTabs.at(-1);
+      if (lastNativeTab) lastNativeTab.after(host);
+      else tabList.appendChild(host);
+    }
+    host.title = floatingStatsVisible
+      ? "Open pull-request stats"
+      : "Pull-request stats are disabled in extension settings";
     return host;
   }
 
   function setFloatingStatsVisible(visible, persist = false) {
     floatingStatsVisible = Boolean(visible);
     const host = document.getElementById(HOST_ID);
-    if (host) host.style.display = floatingStatsVisible ? "block" : "none";
+    if (host) host.style.display = dashboardOpen && floatingStatsVisible ? "block" : "none";
     const tabHost = document.getElementById(TAB_HOST_ID);
-    const statsButton = tabHost?.shadowRoot?.querySelector(".stats");
+    const statsButton = tabHost;
     if (statsButton) {
       statsButton.title = floatingStatsVisible
-        ? "Open floating PR stats"
-        : "Floating PR stats are disabled in extension settings";
+        ? "Open pull-request stats"
+        : "Pull-request stats are disabled in extension settings";
     }
     if (persist) chrome.storage.sync.set({ showFloatingStats: floatingStatsVisible });
   }
 
   function renderTabContent(content) {
     latestTabContent = content;
-    ensureTabChips();
+    ensureStatsTab();
   }
 
   function renderLoading(message) {
     const shadow = ensureView();
     shadow.querySelector(".chip-text").textContent = message;
-    renderTabContent(`<span class="chip">${escapeHtml(message)}</span>`);
+    shadow.querySelector(".panel").innerHTML = `<div class="message">${escapeHtml(message)}</div>`;
   }
 
   function metric(value, label, className = "") {
@@ -336,11 +374,7 @@
       : "—";
     const ageDays = stats.created ? Math.max(0, Math.floor((Date.now() - new Date(stats.created).getTime()) / 86_400_000)) : "—";
     shadow.querySelector(".panel").innerHTML = `
-      <div class="head">
-        <div class="eyebrow"><span>PR #${escapeHtml(stats.id)} · ${escapeHtml(stats.status)}</span><span>${escapeHtml(stats.author)}</span></div>
-        <div class="title" title="${escapeHtml(stats.title)}">${escapeHtml(stats.title)}</div>
-        <div class="branch" title="${escapeHtml(`${stats.sourceBranch} → ${stats.targetBranch}`)}">${escapeHtml(stats.sourceBranch)} → ${escapeHtml(stats.targetBranch)}</div>
-      </div>
+      <div class="toolbar"><button class="refresh" type="button">Refresh</button></div>
       <div class="grid">
         ${metric(`+${stats.additions}`, "Added" + (partial ? "*" : ""), "plus")}
         ${metric(`−${stats.deletions}`, "Removed" + (partial ? "*" : ""), "minus")}
@@ -351,33 +385,28 @@
         ${metric(stats.comments, "Comments")}
         ${metric(stats.workItems, "Work items")}
         ${metric(`${ageDays}d`, "Age")}
-      </div>
-      <div class="foot"><span>${partial ? `* LOC excludes ${stats.skippedFiles} large/binary file(s).` : "LOC calculated locally; no data stored."}</span><button class="refresh" type="button">Refresh</button></div>`;
+      </div>`;
     shadow.querySelector(".refresh").addEventListener("click", (event) => {
       event.stopPropagation();
       refresh(true);
     });
-    renderTabContent(`
-      <span class="chip plus">+${escapeHtml(stats.additions)}${partial ? "*" : ""}</span>
-      <span class="chip minus">−${escapeHtml(stats.deletions)}${partial ? "*" : ""}</span>
-      <span class="chip">${escapeHtml(stats.files)}${stats.fileLimitReached ? "+" : ""} files</span>
-      <span class="chip">${escapeHtml(stats.commits)}${stats.commitLimitReached ? "+" : ""} commits</span>`);
   }
 
   function renderError(error) {
     const shadow = ensureView();
     shadow.querySelector(".chip-text").innerHTML = `<span class="error">Stats unavailable</span>`;
-    shadow.querySelector(".panel").innerHTML = `<div class="head"><div class="title">Couldn’t load PR stats</div><div class="branch">${escapeHtml(error?.message || "Unknown Azure DevOps error")}. Reload the page or check your project access.</div></div><div class="foot"><span>Uses your current Azure DevOps session.</span><button class="refresh" type="button">Retry</button></div>`;
+    shadow.querySelector(".panel").innerHTML = `<div class="toolbar"><button class="refresh" type="button">Retry</button></div><div class="message">Couldn’t load PR stats: ${escapeHtml(error?.message || "Unknown Azure DevOps error")}. Reload the page or check your project access.</div>`;
     shadow.querySelector(".refresh").addEventListener("click", (event) => {
       event.stopPropagation();
       refresh(true);
     });
-    renderTabContent('<span class="chip">Stats unavailable</span>');
+    ensureStatsTab();
   }
 
   async function refresh(force = false) {
     const context = lib.parsePrUrl(location.href);
     if (!context) {
+      hideDashboard();
       document.getElementById(HOST_ID)?.remove();
       document.getElementById(TAB_HOST_ID)?.remove();
       view = null;
@@ -387,9 +416,10 @@
       return;
     }
     if (!force && activeUrl === location.href && document.getElementById(HOST_ID)) {
-      ensureTabChips();
+      ensureStatsTab();
       return;
     }
+    if (activeUrl && activeUrl !== location.href) hideDashboard();
     activeUrl = location.href;
     const generation = ++requestGeneration;
     renderLoading("Loading PR stats…");
