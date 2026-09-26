@@ -58,6 +58,25 @@
     return [];
   }
 
+  function summarizeFileExtensions(changes) {
+    const counts = new Map();
+    for (const change of changes) {
+      const extension = getFileExtension(change.item?.path || change.originalPath);
+      counts.set(extension, (counts.get(extension) || 0) + 1);
+    }
+    return [...counts.entries()]
+      .map(([extension, count]) => ({ extension, count }))
+      .sort((a, b) => b.count - a.count || a.extension.localeCompare(b.extension));
+  }
+
+  function getFileExtension(path) {
+    const fileName = String(path || "").split(/[\\/]/).pop() || "";
+    const dot = fileName.lastIndexOf(".");
+    return dot > 0 && dot < fileName.length - 1
+      ? `.${fileName.slice(dot + 1).toLowerCase()}`
+      : "(none)";
+  }
+
   async function getFileContent(context, repositoryId, path, commitId) {
     if (!path || !commitId) return "";
     const item = await getJson(context, `git/repositories/${encodeURIComponent(repositoryId)}/items`, {
@@ -95,15 +114,16 @@
       const isDelete = type.includes("delete");
       const oldPath = change.originalPath || item.originalPath || item.path;
       const newPath = item.path;
+      const extension = getFileExtension(newPath || oldPath);
       try {
         const [before, after] = await Promise.all([
           isAdd ? "" : getFileContent(context, repositoryId, oldPath, baseCommit),
           isDelete ? "" : getFileContent(context, repositoryId, newPath, sourceCommit)
         ]);
-        if (before === null || after === null) return { skipped: true };
-        return lib.countLineChanges(before, after);
+        if (before === null || after === null) return { skipped: true, extension };
+        return { ...lib.countLineChanges(before, after), extension };
       } catch {
-        return { skipped: true };
+        return { skipped: true, extension };
       } finally {
         processed += 1;
         onProgress?.(processed, changes.length);
@@ -115,9 +135,11 @@
       else {
         total.additions += result.additions;
         total.deletions += result.deletions;
+        const current = total.byExtension.get(result.extension) || 0;
+        total.byExtension.set(result.extension, current + result.additions + result.deletions);
       }
       return total;
-    }, { additions: 0, deletions: 0, skipped: 0 });
+    }, { additions: 0, deletions: 0, skipped: 0, byExtension: new Map() });
   }
 
   async function loadStats(context, generation) {
@@ -185,7 +207,11 @@
       comments,
       workItems: unwrapList(workItemsResponse).length,
       reviewers,
-      statuses
+      statuses,
+      fileExtensions: summarizeFileExtensions(fileChanges),
+      lineExtensions: [...loc.byExtension.entries()]
+        .map(([extension, count]) => ({ extension, count }))
+        .sort((a, b) => b.count - a.count || a.extension.localeCompare(b.extension))
     };
   }
 
@@ -203,26 +229,37 @@
       <style>
         :host { color-scheme: light dark; }
         * { box-sizing: border-box; }
-        .wrap { font: 12px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:#242424; }
+        .wrap { font: 13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:#242424; }
         .chip { display:none; }
         .mark { display:grid; place-items:center; width:20px; height:20px; border-radius:6px; background:#0078d4; color:#fff; font-size:10px; font-weight:800; }
         .plus { color:#1a7f37; } .minus { color:#cf222e; }
         .panel { display:none; width:100%; border:1px solid #d6d6d6; border-radius:4px; background:#fff; box-shadow:0 2px 8px #0002; overflow:hidden; }
         .panel.open { display:block; }
-        .toolbar { display:flex; justify-content:flex-end; padding:8px 10px 0; }
-        .message { padding:16px; }
-        .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:7px; padding:10px; }
-        .stat { min-height:68px; padding:11px; border:1px solid #e1e1e1; border-radius:7px; background:#f5f5f5; }
-        .value { font-size:17px; font-weight:700; font-variant-numeric:tabular-nums; }
-        .label { margin-top:2px; color:#57606a; font-size:10px; text-transform:uppercase; letter-spacing:.04em; }
-        .refresh { border:0; border-radius:4px; padding:4px 7px; background:transparent; color:#0969da; cursor:pointer; font:inherit; }
+        .toolbar { display:flex; justify-content:flex-end; padding:10px 12px 0; }
+        .message { padding:18px; font-size:14px; }
+        .grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; max-width:980px; padding:16px; }
+        .stat { min-height:112px; padding:17px; border:1px solid #e1e1e1; border-radius:10px; background:#f5f5f5; display:flex; flex-direction:column; justify-content:center; }
+        .value { font-size:22px; font-weight:700; font-variant-numeric:tabular-nums; }
+        .label { margin-top:6px; color:#424242; font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.055em; }
+        .charts { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; margin:0 16px 16px; }
+        .pie-card { min-height:270px; padding:18px; border:1px solid #e1e1e1; border-radius:10px; background:#f5f5f5; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+        .chart-title { align-self:flex-start; margin-bottom:18px; color:#424242; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.055em; }
+        .pie-layout { display:flex; align-items:center; justify-content:center; gap:32px; width:100%; }
+        .pie { width:190px; height:190px; flex:0 0 190px; border-radius:50%; box-shadow:inset 0 0 0 1px #0002; }
+        .legend { display:grid; gap:10px; min-width:200px; }
+        .legend-item { display:flex; align-items:center; gap:9px; color:#424242; font-size:13px; }
+        .legend-swatch { width:12px; height:12px; flex:0 0 12px; border-radius:3px; }
+        .empty-chart { color:#424242; font-size:14px; }
+        .refresh { border:0; border-radius:4px; padding:5px 8px; background:transparent; color:#0969da; cursor:pointer; font:inherit; }
         .refresh:hover { background:#ddf4ff; }
         .error { max-width:280px; white-space:normal; }
         @media (prefers-color-scheme: dark) {
           .wrap { color:#f1f1f1; }
           .panel { background:#2d2d2d; color:#f1f1f1; border-color:#454545; box-shadow:0 2px 8px #0008; }
           .stat { background:#252525; border-color:#414141; }
-          .label { color:#b8b8b8; }
+          .pie-card { background:#252525; border-color:#414141; }
+          .label,.chart-title { color:#d2d2d2; }
+          .legend-item,.empty-chart { color:#c8c8c8; }
         }
       </style>
       <div class="wrap">
@@ -401,13 +438,34 @@
     return `<div class="stat"><div class="value ${className}">${escapeHtml(value)}</div><div class="label">${escapeHtml(label)}</div></div>`;
   }
 
+  function renderExtensionChart(entries) {
+    const total = entries.reduce((sum, entry) => sum + entry.count, 0);
+    if (!total) return '<div class="empty-chart">No modified files</div>';
+
+    const visibleEntries = entries.slice(0, 7);
+    const otherCount = entries.slice(7).reduce((sum, entry) => sum + entry.count, 0);
+    if (otherCount) visibleEntries.push({ extension: "Other", count: otherCount });
+
+    const colors = ["#0078d4", "#00b7c3", "#498205", "#ffb900", "#d83b01", "#8764b8", "#e3008c", "#7a7574"];
+    let offset = 0;
+    const segments = visibleEntries.map((entry, index) => {
+      const percentage = entry.count / total * 100;
+      const end = offset + percentage;
+      const segment = `${colors[index]} ${offset.toFixed(2)}% ${end.toFixed(2)}%`;
+      offset = end;
+      return segment;
+    });
+    const legend = visibleEntries.map((entry, index) => {
+      const percentage = entry.count / total * 100;
+      return `<div class="legend-item"><span class="legend-swatch" style="background:${colors[index]}"></span><span>${escapeHtml(entry.extension)} · ${percentage.toFixed(1)}%</span></div>`;
+    }).join("");
+    return `<div class="pie-layout"><div class="pie" role="img" aria-label="Modified file extensions" style="background:conic-gradient(${segments.join(",")})"></div><div class="legend">${legend}</div></div>`;
+  }
+
   function renderStats(stats) {
     const shadow = ensureView();
     const partial = stats.skippedFiles || stats.fileLimitReached;
     shadow.querySelector(".chip-text").innerHTML = `<span class="plus">+${stats.additions}</span> <span class="minus">−${stats.deletions}</span> · ${stats.commits}${stats.commitLimitReached ? "+" : ""} commits · ${stats.files}${stats.fileLimitReached ? "+" : ""} files${partial ? " *" : ""}`;
-    const checksText = stats.statuses.total
-      ? `${stats.statuses.succeeded}✓ ${stats.statuses.pending}… ${stats.statuses.failed}✕`
-      : "—";
     const reviewText = stats.reviewers.total
       ? `${stats.reviewers.approved}/${stats.reviewers.total}`
       : "—";
@@ -420,10 +478,19 @@
         ${metric(stats.files + (stats.fileLimitReached ? "+" : ""), "Files")}
         ${metric(stats.commits + (stats.commitLimitReached ? "+" : ""), "Commits")}
         ${metric(reviewText, "Approvals")}
-        ${metric(checksText, "Checks")}
         ${metric(stats.comments, "Comments")}
         ${metric(stats.workItems, "Work items")}
         ${metric(`${ageDays}d`, "Age")}
+      </div>
+      <div class="charts">
+        <section class="pie-card" aria-label="Files by type">
+          <div class="chart-title">Files by type</div>
+          ${renderExtensionChart(stats.fileExtensions)}
+        </section>
+        <section class="pie-card" aria-label="Lines by type">
+          <div class="chart-title">Lines by type</div>
+          ${renderExtensionChart(stats.lineExtensions)}
+        </section>
       </div>`;
     shadow.querySelector(".refresh").addEventListener("click", (event) => {
       event.stopPropagation();
