@@ -18,6 +18,23 @@ The extension has no background worker, third-party service, or analytics. It ma
 - `firefox/` — Firefox manifest and build script
 - `shared/` — shared runtime code, settings page, and tests
 
+## Stats
+
+| Displayed stat | What it measures | Source |
+| --- | --- | --- |
+| Added | Lines added across readable, non-binary changed files | Azure DevOps [commit diff API](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/diffs/get?view=azure-devops-rest-7.1) plus file contents from the [Git items API](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/items/list?view=azure-devops-rest-7.1); LOC is calculated locally |
+| Removed | Lines removed across readable, non-binary changed files | Azure DevOps [commit diff API](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/diffs/get?view=azure-devops-rest-7.1) plus the [Git items API](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/items/list?view=azure-devops-rest-7.1); LOC is calculated locally |
+| Files | Number of changed files in the PR diff | Azure DevOps [commit diff API](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/diffs/get?view=azure-devops-rest-7.1) |
+| Commits | Number of commits associated with the pull request | Azure DevOps [Pull Request Commits API](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-request-commits?view=azure-devops-rest-7.1) |
+| Approvals | Reviewers with an approving vote compared with total reviewers | Azure DevOps [Get Pull Request API](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-requests/get-pull-request?view=azure-devops-rest-7.1) |
+| Comments | Non-deleted, non-system comments in the pull request | Azure DevOps [Pull Request Threads API](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-request-threads?view=azure-devops-rest-7.1); comments are filtered locally |
+| Work items | Work items linked to the pull request | Azure DevOps [Pull Request Work Items API](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-request-work-items?view=azure-devops-rest-7.1) |
+| Age | Days since the pull request was created | `creationDate` from Azure DevOps [Get Pull Request API](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-requests/get-pull-request?view=azure-devops-rest-7.1), calculated locally |
+| Files by type | Percentage of changed files grouped by extension | File paths from the Azure DevOps [commit diff API](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/diffs/get?view=azure-devops-rest-7.1), grouped locally |
+| Lines by type | Percentage of added plus removed lines grouped by extension | File contents from the Azure DevOps [Git items API](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/items/list?view=azure-devops-rest-7.1), compared locally |
+
+The displayed metrics are not scraped from the rendered Azure DevOps page. The extension reads the current PR URL and uses the page DOM only to place and synchronize the native-looking Stats tab and content view.
+
 ## Build packages
 
 Run the browser-specific script from the repository root:
