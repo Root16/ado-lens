@@ -10,7 +10,11 @@ It shows:
 - check/status results
 - comments, linked work items, and PR age
 
-The extension has no background worker, third-party service, or analytics. It makes same-origin Azure DevOps REST requests with the session already active in the page. Diff metadata and line-diff blocks are processed in memory and are never persisted. If the per-file diff service is unavailable, the extension falls back to comparing file contents in memory. Large and binary files are skipped and marked as partial in the UI. Browser sync storage is used only for extension settings.
+## Demo
+
+![ADO Lens Stats dashboard](img/ado-lens-stats-dashboard.png)
+
+The extension has **no** background worker, third-party service, or analytics. It makes same-origin Azure DevOps REST requests with the session already active in the page. Diff metadata and line-diff blocks are processed in memory and are never persisted. If the per-file diff service is unavailable, the extension falls back to comparing file contents in memory. Large and binary files are skipped and marked as partial in the UI. Browser sync storage is used only for extension settings.
 
 ## Project layout
 
