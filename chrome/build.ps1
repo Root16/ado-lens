@@ -9,7 +9,7 @@ if (Test-Path -LiteralPath $stagePath) { Remove-Item -LiteralPath $stagePath -Re
 New-Item -ItemType Directory -Path (Join-Path $stagePath "src") -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $projectRoot "manifest.json") -Destination (Join-Path $stagePath "manifest.json")
 Copy-Item -LiteralPath (Join-Path $repoRoot "shared\settings.html"), (Join-Path $repoRoot "shared\settings.js") -Destination $stagePath
-Copy-Item -LiteralPath (Join-Path $repoRoot "shared\src\lib.js"), (Join-Path $repoRoot "shared\src\content.js") -Destination (Join-Path $stagePath "src")
+Copy-Item -LiteralPath (Join-Path $repoRoot "shared\src\lib.js"), (Join-Path $repoRoot "shared\src\ado-api.js"), (Join-Path $repoRoot "shared\src\stats.js"), (Join-Path $repoRoot "shared\src\content.js") -Destination (Join-Path $stagePath "src")
 if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
 Compress-Archive -Path (Join-Path $stagePath "*") -DestinationPath $zipPath -CompressionLevel Optimal
 Remove-Item -LiteralPath $stagePath -Recurse -Force

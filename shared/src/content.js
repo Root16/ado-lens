@@ -2,11 +2,9 @@
   "use strict";
 
   const lib = globalThis.AdoLensLib;
+  const statsApi = globalThis.AdoLensStats;
   const HOST_ID = "ado-lens-root";
   const TAB_HOST_ID = "ado-lens-tabs";
-  const MAX_FILE_BYTES = 1_000_000;
-  const MAX_FILE_LINES = 20_000;
-  const CONCURRENCY = 4;
 
   let activeUrl = "";
   let requestGeneration = 0;
@@ -24,195 +22,6 @@
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&#039;");
-  }
-
-  function apiUrl(context, path, params = {}) {
-    const url = new URL(`${context.apiRoot}/_apis/${path}`);
-    url.searchParams.set("api-version", "7.1");
-    for (const [key, value] of Object.entries(params)) {
-      if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
-    }
-    return url.toString();
-  }
-
-  async function getJson(context, path, params) {
-    const response = await fetch(apiUrl(context, path, params), {
-      credentials: "include",
-      headers: { Accept: "application/json" }
-    });
-    if (!response.ok) throw new Error(`Azure DevOps returned ${response.status}`);
-    return response.json();
-  }
-
-  async function optionalJson(context, path, params) {
-    try {
-      return await getJson(context, path, params);
-    } catch {
-      return { value: [], count: 0 };
-    }
-  }
-
-  function unwrapList(response) {
-    if (Array.isArray(response)) return response;
-    if (Array.isArray(response?.value)) return response.value;
-    return [];
-  }
-
-  function summarizeFileExtensions(changes) {
-    const counts = new Map();
-    for (const change of changes) {
-      const extension = getFileExtension(change.item?.path || change.originalPath);
-      counts.set(extension, (counts.get(extension) || 0) + 1);
-    }
-    return [...counts.entries()]
-      .map(([extension, count]) => ({ extension, count }))
-      .sort((a, b) => b.count - a.count || a.extension.localeCompare(b.extension));
-  }
-
-  function getFileExtension(path) {
-    const fileName = String(path || "").split(/[\\/]/).pop() || "";
-    const dot = fileName.lastIndexOf(".");
-    return dot > 0 && dot < fileName.length - 1
-      ? `.${fileName.slice(dot + 1).toLowerCase()}`
-      : "(none)";
-  }
-
-  async function getFileContent(context, repositoryId, path, commitId) {
-    if (!path || !commitId) return "";
-    const item = await getJson(context, `git/repositories/${encodeURIComponent(repositoryId)}/items`, {
-      path,
-      includeContent: true,
-      resolveLfs: true,
-      "versionDescriptor.version": commitId,
-      "versionDescriptor.versionType": "commit"
-    });
-    if (item?.isBinary || typeof item?.content !== "string") return null;
-    if (item.content.length > MAX_FILE_BYTES) return null;
-    if (lib.splitLines(item.content).length > MAX_FILE_LINES) return null;
-    return item.content;
-  }
-
-  async function mapPool(items, worker) {
-    const results = new Array(items.length);
-    let next = 0;
-    async function run() {
-      while (next < items.length) {
-        const index = next++;
-        results[index] = await worker(items[index], index);
-      }
-    }
-    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, items.length) }, run));
-    return results;
-  }
-
-  async function calculateLoc(context, repositoryId, changes, baseCommit, sourceCommit, onProgress) {
-    let processed = 0;
-    const results = await mapPool(changes, async (change) => {
-      const item = change.item || {};
-      const type = String(change.changeType || "edit").toLowerCase();
-      const isAdd = type.includes("add") && !type.includes("rename");
-      const isDelete = type.includes("delete");
-      const oldPath = change.originalPath || item.originalPath || item.path;
-      const newPath = item.path;
-      const extension = getFileExtension(newPath || oldPath);
-      try {
-        const [before, after] = await Promise.all([
-          isAdd ? "" : getFileContent(context, repositoryId, oldPath, baseCommit),
-          isDelete ? "" : getFileContent(context, repositoryId, newPath, sourceCommit)
-        ]);
-        if (before === null || after === null) return { skipped: true, extension };
-        return { ...lib.countLineChanges(before, after), extension };
-      } catch {
-        return { skipped: true, extension };
-      } finally {
-        processed += 1;
-        onProgress?.(processed, changes.length);
-      }
-    });
-
-    return results.reduce((total, result) => {
-      if (result.skipped) total.skipped += 1;
-      else {
-        total.additions += result.additions;
-        total.deletions += result.deletions;
-        const current = total.byExtension.get(result.extension) || 0;
-        total.byExtension.set(result.extension, current + result.additions + result.deletions);
-      }
-      return total;
-    }, { additions: 0, deletions: 0, skipped: 0, byExtension: new Map() });
-  }
-
-  async function loadStats(context, generation) {
-    const repositoryPath = encodeURIComponent(context.repository);
-    const pr = await getJson(context, `git/repositories/${repositoryPath}/pullRequests/${context.pullRequestId}`);
-    if (generation !== requestGeneration) return null;
-
-    const repositoryId = pr.repository?.id || context.repository;
-    const prBase = `git/repositories/${encodeURIComponent(repositoryId)}/pullRequests/${context.pullRequestId}`;
-    const sourceCommit = pr.lastMergeSourceCommit?.commitId;
-    const targetCommit = pr.lastMergeTargetCommit?.commitId;
-
-    const [commitsResponse, threadsResponse, workItemsResponse, statusesResponse, diff] = await Promise.all([
-      optionalJson(context, `${prBase}/commits`, { "$top": 1000 }),
-      optionalJson(context, `${prBase}/threads`),
-      optionalJson(context, `${prBase}/workitems`),
-      optionalJson(context, `${prBase}/statuses`),
-      getJson(context, `git/repositories/${encodeURIComponent(repositoryId)}/diffs/commits`, {
-        baseVersion: targetCommit,
-        baseVersionType: "commit",
-        targetVersion: sourceCommit,
-        targetVersionType: "commit",
-        diffCommonCommit: true,
-        "$top": 2000
-      })
-    ]);
-    if (generation !== requestGeneration) return null;
-
-    const allChanges = unwrapList(diff?.changes || diff);
-    const fileChanges = allChanges.filter((change) => !change.item?.isFolder && !String(change.item?.gitObjectType || "").toLowerCase().includes("tree"));
-    const commonCommit = typeof diff?.commonCommit === "string"
-      ? diff.commonCommit
-      : diff?.commonCommit?.commitId || targetCommit;
-
-    const loc = await calculateLoc(context, repositoryId, fileChanges, commonCommit, sourceCommit, (done, total) => {
-      if (generation === requestGeneration) renderLoading(`Calculating LOC ${done}/${total}…`);
-    });
-    if (generation !== requestGeneration) return null;
-
-    const commits = unwrapList(commitsResponse);
-    const threads = unwrapList(threadsResponse);
-    const comments = threads.reduce((count, thread) => count + (thread.comments || []).filter((comment) => {
-      const type = String(comment.commentType || "").toLowerCase();
-      return !comment.isDeleted && type !== "system";
-    }).length, 0);
-    const statuses = lib.summarizeStatuses(unwrapList(statusesResponse));
-    const reviewers = lib.summarizeReviewers(pr.reviewers);
-
-    return {
-      title: pr.title,
-      id: pr.pullRequestId,
-      author: pr.createdBy?.displayName || "Unknown",
-      sourceBranch: String(pr.sourceRefName || "").replace(/^refs\/heads\//, ""),
-      targetBranch: String(pr.targetRefName || "").replace(/^refs\/heads\//, ""),
-      created: pr.creationDate,
-      status: pr.status,
-      mergeStatus: pr.mergeStatus,
-      additions: loc.additions,
-      deletions: loc.deletions,
-      skippedFiles: loc.skipped,
-      files: fileChanges.length,
-      fileLimitReached: diff?.allChangesIncluded === false,
-      commits: commits.length,
-      commitLimitReached: commits.length >= 1000,
-      comments,
-      workItems: unwrapList(workItemsResponse).length,
-      reviewers,
-      statuses,
-      fileExtensions: summarizeFileExtensions(fileChanges),
-      lineExtensions: [...loc.byExtension.entries()]
-        .map(([extension, count]) => ({ extension, count }))
-        .sort((a, b) => b.count - a.count || a.extension.localeCompare(b.extension))
-    };
   }
 
   function ensureView() {
@@ -530,7 +339,9 @@
     const generation = ++requestGeneration;
     renderLoading("Loading PR stats…");
     try {
-      const stats = await loadStats(context, generation);
+      const stats = await statsApi.loadStats(context, () => generation === requestGeneration, (done, total) => {
+        if (generation === requestGeneration) renderLoading(`Calculating LOC ${done}/${total}…`);
+      });
       if (stats && generation === requestGeneration) renderStats(stats);
     } catch (error) {
       if (generation === requestGeneration) renderError(error);
