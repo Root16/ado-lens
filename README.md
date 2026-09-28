@@ -48,7 +48,7 @@ Run the browser-specific script from the repository root:
 .\firefox\build.ps1
 ```
 
-The uploadable ZIP files are created in `chrome/dist/` and `firefox/dist/`. Each ZIP has `manifest.json` at its root. The Firefox package includes the required built-in data-collection declaration.
+The uploadable ZIP files are created in `chrome/dist/` and `firefox/dist/`. Each ZIP has `manifest.json` at its root and includes the icons generated from `store-assets/source/ado-lens-logo.png`. The Firefox package includes the required built-in data-collection declaration.
 
 ## Load unpacked
 
